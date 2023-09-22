@@ -175,9 +175,12 @@ if check_password():
         pdf = st.file_uploader("", type='pdf')
 
         # Radio button for choosing 'chinese' or 'english' summarization
+        st.write('<style>div.row-widget.stRadio > div{flex-direction:row;justify-content: left;} </style>', unsafe_allow_html=True)
+        st.write('<style>div.st-bf{flex-direction:column;} div.st-ag{font-weight:bold;padding-left:2px;}</style>', unsafe_allow_html=True)
         language = st.radio(
             "Choose language of summarization !",
             ["English", "Chinese", ])
+        
 
         # PDF uploaded + Summary button = start summary
         if pdf is not None: #and st.button("Start PDF Summarization", type="primary"):

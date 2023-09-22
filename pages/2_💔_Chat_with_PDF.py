@@ -60,35 +60,73 @@ if check_password():
  
 
         # Accept user questions/query
-        query = st.text_input("Ask questions about your PDF file:")
+        #query = st.text_input("Ask questions about your PDF file:")
  
         
         #st.write(model.config)
         #st.write(VectorStore)
 
+        # Initialize chat history
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+
+        # Display chat messages from history on app rerun
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
     
-        if query:
-            docs = VectorStore.similarity_search(query=query, k=3)
-            st.subheader(":blue[Top 3] most related paragraph based on the question: \n")
-            st.write(docs)
+        # React to user input
+        if prompt := st.chat_input("Ask about PDF !"):
+
+
+            docs = VectorStore.similarity_search(query=prompt, k=3)
+            # st.subheader(":blue[Top 3] most related paragraph based on the question: \n")
+            # st.write(docs)
  
+
+            # LLM + QA Chain
             llm = OpenAI(model_name='gpt-3.5-turbo')
             chain = load_qa_chain(llm=llm, chain_type="stuff")
 
-            with get_openai_callback() as cb:
-                with st.spinner(f'Thinking... \n'):
 
-                    response = chain.run(input_documents=docs, question=query)
-                    st.subheader("Answer based on :blue[top 3] most similar paragraph above: \n")
-                    st.info(response, icon="✅")
 
-                    st.balloons()
+            # with get_openai_callback() as cb:
+            #     with st.spinner(f'Thinking... \n'):
 
-                    st.markdown("""---""") 
 
-                    st.write(f'Pricing of summary :blue[{pdf.name}]\n')
-                    st.caption(f"Total Tokens: {cb.total_tokens}")
-                    st.caption(f"Prompt Tokens: {cb.prompt_tokens}")
-                    st.caption(f"Completion Tokens: {cb.completion_tokens}")
-                    st.caption(f"Total Cost (USD): ${cb.total_cost}")
+                    
+            # Display user message in chat message container
+            st.chat_message("user").markdown(prompt)
+            # Add user message to chat history
+            st.session_state.messages.append({"role": "user", "content": prompt})
+
+
+            # Reponse from LLM
+            llm_response = chain.run(input_documents=docs, question=prompt)
+
+
+            response = f"{llm_response}"
+            # Display assistant response in chat message container
+            with st.chat_message("assistant"):
+                st.markdown(response)
+            # Add assistant response to chat history
+            st.session_state.messages.append({"role": "assistant", "content": response})
+
+
+            
+
+                    
+                    # st.subheader("Answer based on :blue[top 3] most similar paragraph above: \n")
+                    # st.info(response, icon="✅")
+
+                    # st.balloons()
+
+                    # st.markdown("""---""") 
+
+                    # st.write(f'Pricing of summary :blue[{pdf.name}]\n')
+                    # st.caption(f"Total Tokens: {cb.total_tokens}")
+                    # st.caption(f"Prompt Tokens: {cb.prompt_tokens}")
+                    # st.caption(f"Completion Tokens: {cb.completion_tokens}")
+                    # st.caption(f"Total Cost (USD): ${cb.total_cost}")
  

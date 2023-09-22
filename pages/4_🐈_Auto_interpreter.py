@@ -13,10 +13,7 @@ with open('style.css')as f:
 
 # ----------------------------------------------------------------------------------------------- #
 
-import interpreter
 
-interpreter.api_key = st.secrets["chatgpt_api"]
-st.write(interpreter.chat())
 
     
 
