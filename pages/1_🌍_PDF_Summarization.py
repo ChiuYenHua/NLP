@@ -1,29 +1,37 @@
 # Libraries
 import streamlit as st
-from langchain.chat_models import ChatOpenAI
+from langchain.llms.openai import OpenAI
+from langchain_openai import ChatOpenAI
 from langchain.chains.summarize import load_summarize_chain
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import CharacterTextSplitter
 from langchain.callbacks import get_openai_callback
-from langchain import PromptTemplate
+#from langchain.prompts import PromptTemplate
 import os
 from function import check_password
 import pdf2image
 import numpy as np
 import cv2
+import re
 from pytesseract import pytesseract
+
+from langchain.chains.combine_documents.stuff import StuffDocumentsChain
+from langchain.chains.llm import LLMChain
+from langchain.prompts import PromptTemplate
+from langchain.chains import MapReduceDocumentsChain, ReduceDocumentsChain
 
 
 # PDF split to image and OCR, then return all strings in PDF
 def pdf2image_extract_text(_images):
-    # Notification for user that PDF is image
-    st.warning('This PDF file is image format....', icon="✨")
-
     # Text for pdf extraction
     text = ''
 
+    # Loading bar
+    my_bar = st.progress(0, text="Loading...")
+
     # Loop through images (every page of PDF)
-    for image in _images:
+    for index, image in enumerate(_images):
         # Preprocessing image
         ## Convert PIL format to CV2 format
         open_cv_image = np.array(image) 
@@ -35,11 +43,23 @@ def pdf2image_extract_text(_images):
         ## Thresholding (image restoration)
         _, preprocessed_image = cv2.threshold(open_cv_image, 170, 255, cv2.THRESH_BINARY)
 
+        # Detect image language
+        osd = pytesseract.image_to_osd(preprocessed_image)
+        script = re.search("Script: ([a-zA-Z]+)\n", osd).group(1)
+
         # OCR image
-        OCR_text = pytesseract.image_to_string(preprocessed_image)
+        if script=='Han':
+            OCR_text = pytesseract.image_to_string(preprocessed_image, lang='chi_tra')
+        elif script=='Japanese':
+            OCR_text = pytesseract.image_to_string(preprocessed_image, lang='jpn')
+        else:
+            OCR_text = pytesseract.image_to_string(preprocessed_image)
 
         # Store all text after recognition
         text += OCR_text
+
+        # Loading bar update
+        my_bar.progress(int(100/len(_images))*(index+1), text=f'Now scanning on page {index+1}')
     
     return text
 
@@ -57,56 +77,89 @@ def summarization(_image_or_text, language):
     text = text.replace('\t', ' ')
 
     # Split up text
-    text_splitter = RecursiveCharacterTextSplitter(separators=["\n\n", "\n", " ", ""], chunk_size=2500, chunk_overlap=250)
+    text_splitter = RecursiveCharacterTextSplitter(separators=["\n\n", "\n", " ", ""], chunk_size=3000, chunk_overlap=300)
     docs = text_splitter.create_documents([text])
 
     # Model + Prompt
-    llm = ChatOpenAI(temperature=0, model_name="gpt-3.5-turbo")
+    llm = ChatOpenAI(temperature=0, model_name="gpt-3.5-turbo", api_key=st.secrets["chatgpt_api"])
+    #llm = OpenAI(api_key=st.secrets["chatgpt_api"], temperature=0, model_name="gpt-3.5-turbo")
+    #llm = OpenAIChat(model_name="gpt-3.5-turbo", api_key=st.secrets["chatgpt_api"])
 
     if language=='English':
         map_prompt = """
                         Write a concise summary of the following:
-                        "{text}"
+                        "{docs}"
                         CONCISE SUMMARY:
                     """
-        map_prompt_template = PromptTemplate(template=map_prompt, input_variables=["text"])
 
-        combine_prompt = """
+        reduce_prompt = """
                             Write a concise summary of the following text delimited by triple backquotes.
                             Return your response in bullet points which covers the key points of the text.
-                            ```{text}```
+                            ```{docs}```
                             BULLET POINT SUMMARY:
                         """
-        combine_prompt_template = PromptTemplate(template=combine_prompt, input_variables=["text"])
 
     elif language=='Chinese':
-        map_prompt = """
-                        寫出以下內容的簡潔摘要:
-                        "{text}"
-                        簡潔總結:
-                    """
-        map_prompt_template = PromptTemplate(template=map_prompt, input_variables=["text"])
+        # Map
+        map_template = """寫出以下內容的簡潔摘要:
+        "{docs}"
+        簡潔總結:"""
 
-        combine_prompt = """
-                            寫出以下由三重反引號分隔的文字的簡潔摘要。
-                            以涵蓋文字要點的要點形式傳回您的回覆。
-                            ```{text}```
-                            重點總結:
-                        """
-        combine_prompt_template = PromptTemplate(template=combine_prompt, input_variables=["text"])
+        # Reduce
+        reduce_template = """以條列式寫出10個簡潔摘要 譬如 1.abc\n2.abc\n
+        以涵蓋文字要點的要點形式傳回您的回覆。
+        "{docs}"
+        重點總結:"""
 
-    summary_chain = load_summarize_chain(llm=llm,
-                                        chain_type='map_reduce',
-                                        map_prompt=map_prompt_template,
-                                        combine_prompt=combine_prompt_template)
- 
+
+    # Sub chain+template
+    map_prompt = PromptTemplate.from_template(map_template)
+    map_chain = LLMChain(llm=llm, prompt=map_prompt)
+
+    reduce_prompt = PromptTemplate.from_template(reduce_template)
+    reduce_chain = LLMChain(llm=llm, prompt=reduce_prompt)
+
+    # Combination chain
+    # Takes a list of documents, combines them into a single string, and passes this to an LLMChain
+    combine_documents_chain = StuffDocumentsChain(
+        llm_chain=reduce_chain, document_variable_name="docs"
+    )
+
+    # Combines and iteratively reduces the mapped documents
+    reduce_documents_chain = ReduceDocumentsChain(
+        # This is final chain that is called.
+        combine_documents_chain=combine_documents_chain,
+        # If documents exceed context for `StuffDocumentsChain`
+        collapse_documents_chain=combine_documents_chain,
+        # The maximum number of tokens to group documents into.
+        token_max=4000,
+    )
+
+    # Combining documents by mapping a chain over them, then combining results
+    map_reduce_chain = MapReduceDocumentsChain(
+        # Map chain
+        llm_chain=map_chain,
+        # Reduce chain
+        reduce_documents_chain=reduce_documents_chain,
+        # The variable name in the llm_chain to put the documents in
+        document_variable_name="docs",
+        # Return the results of the map steps in the output
+        return_intermediate_steps=False,
+    )
+
+    text_splitter = CharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=3000, chunk_overlap=0
+    )
+
+    # Make split docs
+    split_docs = text_splitter.split_documents(docs)
 
     # Calculate price
     with get_openai_callback() as cb:
         # Summarization
         with st.spinner(f'Summarizing... {pdf.name}'):
 
-            output = summary_chain.run(docs)
+            output = map_reduce_chain.invoke(split_docs)['output_text']
             st.subheader(f'Summary of :blue[{pdf.name}] :sunglasses: \n')
             st.info(output, icon="✅")
 
@@ -131,7 +184,6 @@ def check_pdf_in_history(language):
     return False
 
 
-
 # Confit
 st.set_page_config(page_title='PEACE', page_icon=':earth_asia:', layout='wide')
 
@@ -144,10 +196,6 @@ st.title('🌍 PDF Summarization')
 # Style
 with open('style.css')as f:
     st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html = True)
-
-# Load Chatgpt API key
-os.environ['OPENAI_API_KEY'] = st.secrets["chatgpt_api"]
-
 
 # Check password
 if check_password():
@@ -179,7 +227,7 @@ if check_password():
         st.write('<style>div.st-bf{flex-direction:column;} div.st-ag{font-weight:bold;padding-left:2px;}</style>', unsafe_allow_html=True)
         language = st.radio(
             "Choose language of summarization !",
-            ["English", "Chinese", ])
+            ["Chinese", "English", ])
         
 
         # PDF uploaded + Summary button = start summary
@@ -211,6 +259,9 @@ if check_password():
 
                 # PDF == image, then extract as image
                 if text=='':
+                    # Notification for user that PDF is image
+                    st.warning('This PDF file is "image" format....', icon="✨")
+
                     # PDF to image
                     _images = pdf2image.convert_from_bytes(pdf.getvalue())
 
@@ -219,6 +270,9 @@ if check_password():
 
                 # PDF == text, then extract as text
                 else:
+                    # Notification for user that PDF is image
+                    st.warning('This PDF file is "PDF" format....', icon="✨")
+
                     # Summarization
                     output = summarization(text, language)
                 

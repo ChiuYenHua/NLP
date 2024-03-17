@@ -81,8 +81,8 @@ if check_password():
 
 
             docs = VectorStore.similarity_search(query=prompt, k=3)
-            # st.subheader(":blue[Top 3] most related paragraph based on the question: \n")
-            # st.write(docs)
+            st.subheader(":blue[Top 3] most related paragraph based on the question: \n")
+            st.write(docs)
  
 
             # LLM + QA Chain
