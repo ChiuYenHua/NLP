@@ -1,4 +1,3 @@
-update
 poppler-utils
 tesseract-ocr
 libtesseract-dev
