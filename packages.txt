@@ -1,3 +1,5 @@
 poppler-utils
 tesseract-ocr
+tesseract-ocr-chi_tra
+tesseract-ocr-jpn
 libtesseract-dev
